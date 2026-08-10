@@ -2,6 +2,7 @@ import os
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.agent.querymind import QueryMindAgent
@@ -17,6 +18,17 @@ app = FastAPI(
     version="1.0.0",
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class ConnectRequest(BaseModel):
+    database_url: str
+
 
 class QueryRequest(BaseModel):
     question: str
@@ -27,6 +39,31 @@ class QueryRequest(BaseModel):
 @app.get("/")
 def root():
     return {"message": "QueryMind API is running"}
+
+
+@app.post("/connect")
+def connect(request: ConnectRequest):
+    try:
+        schema = get_schema(request.database_url)
+        relationships = get_relationships(request.database_url)
+
+        return {
+            "success": True,
+            "tables": list(schema.keys()),
+            "table_count": len(schema),
+            "relationship_count": sum(
+                len(rels) for rels in relationships.values()
+            ),
+        }
+
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "stage": "database",
+                "error": "Failed to connect to the database. Check the URL and try again.",
+            },
+        )
 
 
 @app.post("/query")

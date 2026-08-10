@@ -1,21 +1,17 @@
+import { BrowserRouter, Routes, Route } from "react-router-dom";
 
-import Sidebar from "./components/Sidebar";
-import ChatWindow from "./components/ChatWindow";
-import './App.css'
+import Home from "./pages/Home";
+import QueryPage from "./pages/QueryPage";
 
 function App() {
-
   return (
-
-      <div className="flex min-h-screen bg-gray-950 text-white">
-
-        <Sidebar />
-
-        <ChatWindow />
-
-      </div>
-    
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/query" element={<QueryPage />} />
+      </Routes>
+    </BrowserRouter>
   );
 }
 
-export default App
+export default App;

@@ -1,0 +1,12 @@
+uvicorn
+sqlalchemy
+fastapi
+psycopg2-binary
+pydantic
+pydantic-settings
+python-dotenv
+
+langchain
+langchain-huggingface
+huggingface_hub
+sqlglot

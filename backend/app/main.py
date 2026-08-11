@@ -2,14 +2,13 @@ import os
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-
+from fastapi.middleware.cors import CORSMiddleware
 from app.agent.querymind import QueryMindAgent
 from app.database.schema_inspector import get_schema, get_relationships
+from pydantic import BaseModel
 
 load_dotenv()
-
 
 
 app = FastAPI(
@@ -25,21 +24,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 class ConnectRequest(BaseModel):
     database_url: str
+
+class ConversationTurn(BaseModel):
+    role: str  # "assistant" or "user"
+    content: str
 
 
 class QueryRequest(BaseModel):
     question: str
     database_url: str
-
-
-
-@app.get("/")
-def root():
-    return {"message": "QueryMind API is running"}
-
+    conversation_history: list[ConversationTurn] = []
 
 @app.post("/connect")
 def connect(request: ConnectRequest):
@@ -66,8 +62,19 @@ def connect(request: ConnectRequest):
         )
 
 
+@app.get("/")
+def root():
+    return {"message": "QueryMind API is running"}
+
+
 @app.post("/query")
 def query(request: QueryRequest):
+
+    if not request.question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty")
+
+    if not request.database_url.strip():
+        raise HTTPException(status_code=400, detail="database_url cannot be empty")
 
     agent = QueryMindAgent(database_url=request.database_url)
 
@@ -79,6 +86,7 @@ def query(request: QueryRequest):
             question=request.question,
             schema=raw_schema,
             relationships=raw_relationships,
+            conversation_history=[turn.dict() for turn in request.conversation_history],
         )
 
         if not result["success"]:
@@ -91,8 +99,18 @@ def query(request: QueryRequest):
                 },
             )
 
+        if result["stage"] == "clarification":
+            return {
+                "success": True,
+                "type": "clarification",
+                "question": request.question,
+                "message": result["message"],
+                "options": result["options"],
+            }
+
         return {
             "success": True,
+            "type": "result",
             "question": request.question,
             "sql": result["sql"],
             "results": result["results"],

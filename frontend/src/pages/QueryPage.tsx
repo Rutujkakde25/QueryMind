@@ -1,7 +1,11 @@
 import { type FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { executeQuery, type QueryResponse } from "../services/api";
+import {
+  executeQuery,
+  type ConversationTurn,
+  type ResultResponse,
+} from "../services/api";
 
 function QueryPage() {
   const navigate = useNavigate();
@@ -13,9 +17,60 @@ function QueryPage() {
   );
 
   const [question, setQuestion] = useState("");
-  const [result, setResult] = useState<QueryResponse | null>(null);
+  const [activeQuestion, setActiveQuestion] = useState("");
+  const [conversationHistory, setConversationHistory] = useState<ConversationTurn[]>([]);
+  const [clarification, setClarification] = useState<{
+    message: string;
+    options: string[];
+  } | null>(null);
+  const [result, setResult] = useState<ResultResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  const runQuery = async (
+    questionToAsk: string,
+    history: ConversationTurn[]
+  ) => {
+    if (!databaseUrl) {
+      setError("Database connection not found.");
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+
+    try {
+      const data = await executeQuery(
+        questionToAsk,
+        databaseUrl,
+        history
+      );
+
+      if (data.type === "clarification") {
+        setClarification({
+          message: data.message,
+          options: data.options,
+        });
+        setConversationHistory([
+          ...history,
+          { role: "assistant", content: data.message },
+        ]);
+        setResult(null);
+      } else {
+        setResult(data);
+        setClarification(null);
+      }
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Something went wrong."
+      );
+      setClarification(null);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -24,31 +79,39 @@ function QueryPage() {
       return;
     }
 
-    if (!databaseUrl) {
-      setError("Database connection not found.");
+    if (clarification) {
+      // The typed text is the user's answer to the pending clarification.
+      const updatedHistory: ConversationTurn[] = [
+        ...conversationHistory,
+        { role: "user", content: question },
+      ];
+
+      setQuestion("");
+      setConversationHistory(updatedHistory);
+      await runQuery(activeQuestion, updatedHistory);
       return;
     }
 
-    setLoading(true);
-    setError("");
+    // Starting a brand new question.
+    setActiveQuestion(question);
+    setConversationHistory([]);
     setResult(null);
 
-    try {
-      const data = await executeQuery(
-        question,
-        databaseUrl
-      );
+    const askedQuestion = question;
+    setQuestion("");
+    await runQuery(askedQuestion, []);
+  };
 
-      setResult(data);
-    } catch (error) {
-      setError(
-        error instanceof Error
-          ? error.message
-          : "Something went wrong."
-      );
-    } finally {
-      setLoading(false);
-    }
+  const handleOptionClick = async (option: string) => {
+    if (loading) return;
+
+    const updatedHistory: ConversationTurn[] = [
+      ...conversationHistory,
+      { role: "user", content: option },
+    ];
+
+    setConversationHistory(updatedHistory);
+    await runQuery(activeQuestion, updatedHistory);
   };
 
   const handleDisconnect = () => {
@@ -134,7 +197,7 @@ function QueryPage() {
         <div className="flex flex-1 flex-col overflow-y-auto px-6 py-6">
 
           {/* Initial message */}
-          {!result && !loading && !error && (
+          {!result && !clarification && !loading && !error && (
             <div className="flex flex-1 items-center justify-center">
 
               <div className="text-center">
@@ -186,8 +249,45 @@ function QueryPage() {
             </div>
           )}
 
+          {/* Clarification */}
+          {!loading && clarification && (
+            <div className="mx-auto w-full max-w-3xl space-y-4">
+
+              <div>
+                <p className="text-xs font-semibold uppercase text-gray-500">
+                  Your question
+                </p>
+
+                <p className="mt-2 text-gray-200">
+                  {activeQuestion}
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-gray-800 bg-gray-900 p-4">
+
+                <p className="text-gray-200">
+                  {clarification.message}
+                </p>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {clarification.options.map((option) => (
+                    <button
+                      key={option}
+                      onClick={() => handleOptionClick(option)}
+                      className="rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-200 hover:bg-gray-800"
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+
+              </div>
+
+            </div>
+          )}
+
           {/* Result */}
-          {result && (
+          {!loading && result && (
             <div className="mx-auto w-full max-w-5xl space-y-6">
 
               {/* Question */}
@@ -322,7 +422,11 @@ function QueryPage() {
               onChange={(event) =>
                 setQuestion(event.target.value)
               }
-              placeholder="Ask a question about your data..."
+              placeholder={
+                clarification
+                  ? "Type your answer, or click an option above..."
+                  : "Ask a question about your data..."
+              }
               disabled={loading}
               className="flex-1 bg-transparent py-2 text-sm text-white outline-none placeholder:text-gray-600 disabled:cursor-not-allowed"
             />

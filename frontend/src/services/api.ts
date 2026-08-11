@@ -7,13 +7,29 @@ export interface ConnectResponse {
   relationship_count: number;
 }
 
-export interface QueryResponse {
+export interface ConversationTurn {
+  role: "assistant" | "user";
+  content: string;
+}
+
+export interface ClarificationResponse {
   success: boolean;
+  type: "clarification";
+  question: string;
+  message: string;
+  options: string[];
+}
+
+export interface ResultResponse {
+  success: boolean;
+  type: "result";
   question: string;
   sql: string;
   results: Record<string, unknown>[];
   row_count: number;
 }
+
+export type QueryResponse = ClarificationResponse | ResultResponse;
 
 export async function connectDatabase(
   databaseUrl: string
@@ -41,7 +57,8 @@ export async function connectDatabase(
 
 export async function executeQuery(
   question: string,
-  databaseUrl: string
+  databaseUrl: string,
+  conversationHistory: ConversationTurn[] = []
 ): Promise<QueryResponse> {
   const response = await fetch(`${API_BASE_URL}/query`, {
     method: "POST",
@@ -51,6 +68,7 @@ export async function executeQuery(
     body: JSON.stringify({
       question,
       database_url: databaseUrl,
+      conversation_history: conversationHistory,
     }),
   });
 

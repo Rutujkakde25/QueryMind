@@ -1,17 +1,28 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { ThemeProvider } from "./lib/theme-provider";
+import { SessionProvider } from "./lib/session";
+import SiteLayout from "./components/SiteLayout";
+import LandingPage from "./pages/LandingPage";
+import AboutPage from "./pages/AboutPage";
+import ContactPage from "./pages/ContactPage";
+import AppPage from "./pages/AppPage";
 
-import Home from "./pages/Home";
-import QueryPage from "./pages/QueryPage";
-
-function App() {
+export default function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/query" element={<QueryPage />} />
-      </Routes>
-    </BrowserRouter>
+    <ThemeProvider>
+      <SessionProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route element={<SiteLayout />}>
+              <Route path="/" element={<LandingPage />} />
+              <Route path="/about" element={<AboutPage />} />
+              <Route path="/contact" element={<ContactPage />} />
+              <Route path="/app" element={<AppPage />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </SessionProvider>
+    </ThemeProvider>
   );
 }
-
-export default App;

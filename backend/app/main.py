@@ -35,7 +35,23 @@ class ConversationTurn(BaseModel):
 class QueryRequest(BaseModel):
     question: str
     database_url: str
+<<<<<<< HEAD
     conversation_history: list[ConversationTurn] = []
+=======
+
+
+class ContactRequest(BaseModel):
+    name: str
+    email: str
+    message: str
+
+
+
+@app.get("/")
+def root():
+    return {"message": "QueryMind API is running"}
+
+>>>>>>> 28c9fe2 (UI Updataion)
 
 @app.post("/connect")
 def connect(request: ConnectRequest):
@@ -50,6 +66,7 @@ def connect(request: ConnectRequest):
             "relationship_count": sum(
                 len(rels) for rels in relationships.values()
             ),
+            "schema": schema,
         }
 
     except Exception:
@@ -62,9 +79,18 @@ def connect(request: ConnectRequest):
         )
 
 
-@app.get("/")
-def root():
-    return {"message": "QueryMind API is running"}
+<<<<<<< HEAD
+class QueryRequest(BaseModel):
+    question: str
+    database_url: str
+    conversation_history: list[ConversationTurn] = []
+
+
+class ContactRequest(BaseModel):
+    name: str
+    email: str
+    message: str
+>>>>>>> 28c9fe2 (UI Updataion)
 
 
 @app.post("/query")

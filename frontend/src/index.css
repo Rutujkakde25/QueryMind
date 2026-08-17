@@ -1,1 +1,209 @@
-@import "tailwindcss";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------------------------------------------------------------------------
+   Bone & Phosphor palette.
+   Warm neutral ground (bone/panel/line/ink/ash) + amber accent (phosphor),
+   used sparingly: primary action + verification moments only.
+   SQL syntax highlighting lives in its OWN code palette (--sql-*), kept
+   visually separate from the UI chrome.
+--------------------------------------------------------------------------- */
+:root,
+[data-theme="dark"] {
+  --bone: #171310;
+  --panel: #211c16;
+  --panel-2: #2b241b;
+  --line: #3c352b;
+  --ink: #efe8da;
+  --mute: #a79d8a;
+  --amber: #e8a33d;
+  --on-amber: #201502;
+  --danger: #e06a5a;
+
+  --sql-kw: #4bbfa3;
+  --sql-fn: #8fa6c9;
+  --sql-str: #d98f66;
+  --sql-num: #a9b8d9;
+}
+
+[data-theme="light"] {
+  --bone: #f5f0e6;
+  --panel: #fcfaf4;
+  --panel-2: #ece6d8;
+  --line: #dcd3c2;
+  --ink: #2a241a;
+  --mute: #6e6452;
+  --amber: #9a5708;
+  --on-amber: #ffffff;
+  --danger: #b2442f;
+
+  --sql-kw: #0f7c67;
+  --sql-fn: #3d5f8a;
+  --sql-str: #b04a34;
+  --sql-num: #4b5f84;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--bone);
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+::selection {
+  background: var(--amber);
+  color: var(--on-amber);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 8px;
+}
+
+/* Visible keyboard focus everywhere. */
+:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ---------------------------------------------------------------------------
+   Components
+--------------------------------------------------------------------------- */
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 font-medium transition select-none;
+    font-size: 13.5px;
+  }
+
+  .btn-primary {
+    background: var(--amber);
+    color: var(--on-amber);
+  }
+  .btn-primary:hover {
+    filter: brightness(1.07);
+  }
+  .btn-primary:active {
+    filter: brightness(0.94);
+  }
+  .btn-primary:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    filter: none;
+  }
+
+  .btn-ghost {
+    border: 1px solid var(--line);
+    color: var(--ink);
+    background: var(--panel);
+  }
+  .btn-ghost:hover {
+    border-color: var(--mute);
+  }
+  .btn-ghost:active {
+    background: var(--panel-2);
+  }
+  .btn-ghost:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .field {
+    @apply w-full rounded-lg border bg-panel px-3 py-2.5 transition;
+    border-color: var(--line);
+    font-size: 13.5px;
+    color: var(--ink);
+  }
+  .field::placeholder {
+    color: var(--mute);
+    opacity: 0.75;
+  }
+  .field:hover {
+    border-color: var(--mute);
+  }
+  .field:focus {
+    outline: none;
+    border-color: var(--amber);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 22%, transparent);
+  }
+
+  .console-card {
+    @apply rounded-xl border bg-panel;
+    border-color: var(--line);
+    box-shadow: 0 1px 0 0 color-mix(in srgb, var(--line) 55%, transparent),
+      0 24px 48px -24px rgba(23, 19, 16, 0.45);
+  }
+}
+
+/* Highlighter swipe under a key word — one of the accent's few homes. */
+.mark {
+  background: linear-gradient(
+    transparent 62%,
+    color-mix(in srgb, var(--amber) 30%, transparent) 62%
+  );
+  padding: 0 0.06em;
+}
+
+/* ---------------------------------------------------------------------------
+   SQL syntax highlighting — a separate code palette from the UI chrome.
+--------------------------------------------------------------------------- */
+.sql-kw {
+  color: var(--sql-kw);
+  font-weight: 600;
+}
+.sql-fn {
+  color: var(--sql-fn);
+}
+.sql-str {
+  color: var(--sql-str);
+}
+.sql-num {
+  color: var(--sql-num);
+}
+.sql-comment {
+  color: var(--mute);
+  font-style: italic;
+}
+.sql-op {
+  color: var(--mute);
+}
+.sql-id {
+  color: var(--ink);
+}
+.sql-tag {
+  color: var(--sql-kw);
+}
+
+/* Blinking caret for the hero demo. */
+.terminal-caret::after {
+  content: "▍";
+  color: var(--amber);
+  animation: caret 1s step-end infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

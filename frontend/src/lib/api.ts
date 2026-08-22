@@ -23,7 +23,28 @@ export interface ContactResponse {
   message: string;
 }
 
-export async function connectDatabase(databaseUrl: string): Promise<ConnectResponse> {
+export interface PairingCodeResponse {
+  pairing_code: string;
+}
+
+export interface AgentStatusResponse {
+  connected: boolean;
+}
+
+export interface LocalDbFields {
+  dbType: "postgresql" | "mysql";
+  host: string;
+  port: string;
+  username: string;
+  password: string;
+  database: string;
+}
+
+// ---------------------------------------------------------------------------
+// Cloud path — direct database_url, backend connects straight to the DB.
+// ---------------------------------------------------------------------------
+
+export async function connectCloudDatabase(databaseUrl: string): Promise<ConnectResponse> {
   const response = await fetch(`${API_BASE_URL}/connect`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -38,14 +59,12 @@ export async function connectDatabase(databaseUrl: string): Promise<ConnectRespo
   return response.json();
 }
 
-// Same endpoint as connectDatabase — there's no dedicated /test-connection
-// route yet, so "Test Connection" just calls /connect without advancing the
-// UI past the connect screen.
-export async function testConnection(databaseUrl: string): Promise<ConnectResponse> {
-  return connectDatabase(databaseUrl);
+export async function testCloudConnection(databaseUrl: string): Promise<ConnectResponse> {
+  // No dedicated /test-connection route — reuse /connect, don't advance the UI.
+  return connectCloudDatabase(databaseUrl);
 }
 
-export async function executeQuery(
+export async function executeCloudQuery(
   question: string,
   databaseUrl: string,
   allowedTables?: string[]
@@ -67,6 +86,96 @@ export async function executeQuery(
 
   return response.json();
 }
+
+// ---------------------------------------------------------------------------
+// Local path — relayed through a paired agent over WebSocket. No direct
+// reachability to the user's database is required from the backend.
+// ---------------------------------------------------------------------------
+
+export async function requestPairingCode(): Promise<PairingCodeResponse> {
+  const response = await fetch(`${API_BASE_URL}/agent/pair`, { method: "POST" });
+  if (!response.ok) {
+    throw new Error(`Failed to generate a pairing code (status ${response.status})`);
+  }
+  return response.json();
+}
+
+export async function getAgentStatus(pairingCode: string): Promise<AgentStatusResponse> {
+  const response = await fetch(`${API_BASE_URL}/agent/status/${pairingCode}`);
+  if (!response.ok) {
+    throw new Error(`Failed to check agent status (status ${response.status})`);
+  }
+  return response.json();
+}
+
+/**
+ * Polls agent status until the agent connects or the timeout elapses.
+ * Use after showing the pairing code, while the user launches/pastes it
+ * into the AskDB Agent app.
+ */
+export async function waitForAgentConnection(
+  pairingCode: string,
+  { intervalMs = 2000, timeoutMs = 120000 }: { intervalMs?: number; timeoutMs?: number } = {}
+): Promise<boolean> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const { connected } = await getAgentStatus(pairingCode);
+    if (connected) return true;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return false;
+}
+
+export async function connectLocalDatabase(
+  pairingCode: string,
+  fields: LocalDbFields
+): Promise<ConnectResponse> {
+  const response = await fetch(`${API_BASE_URL}/connect/local`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      pairing_code: pairingCode,
+      db_type: fields.dbType,
+      host: fields.host,
+      port: fields.port,
+      username: fields.username,
+      password: fields.password,
+      database: fields.database,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await parseError(response);
+    throw new Error(errorBody || `Connection failed with status ${response.status}`);
+  }
+
+  return response.json();
+}
+
+export async function executeLocalQuery(
+  pairingCode: string,
+  question: string,
+  conversationHistory: { role: string; content: string }[] = []
+): Promise<QueryResponse> {
+  const response = await fetch(`${API_BASE_URL}/query/local`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      pairing_code: pairingCode,
+      question,
+      conversation_history: conversationHistory,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await parseError(response);
+    throw new Error(errorBody || `Query failed with status ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// ---------------------------------------------------------------------------
 
 export async function submitContact(input: {
   name: string;

@@ -25,7 +25,7 @@ const linkClass = ({ isActive }: { isActive: boolean }) =>
   }`;
 
 export default function Navbar() {
-  const { dbUrl } = useSession();
+  const { connectInfo } = useSession();
 
   return (
     <header className="sticky top-0 z-50 border-b border-line/80 bg-bone/85 backdrop-blur-md">
@@ -43,7 +43,7 @@ export default function Navbar() {
             contact
           </NavLink>
           <div className="mx-1.5 hidden h-5 w-px bg-line sm:block" />
-          {dbUrl && (
+          {connectInfo && (
             <Link
               to="/app"
               className="btn btn-ghost hidden !px-3 !py-1.5 font-mono !text-[12.5px] sm:inline-flex"

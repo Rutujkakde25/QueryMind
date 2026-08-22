@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { executeQuery } from "../lib/api";
+import { executeCloudQuery, executeLocalQuery } from "../lib/api";
 import { useSession } from "../lib/use-session";
 import type { ChatMessage, SchemaTable } from "../lib/types";
 import TablePicker from "../components/workbench/TablePicker";
@@ -9,19 +9,6 @@ import DataTable from "../components/workbench/DataTable";
 import ClarificationCard from "../components/workbench/ClarificationCard";
 import ChatInput from "../components/workbench/ChatInput";
 import SqlBlock from "../components/SqlBlock";
-
-const AMBIGUOUS_TERMS: Record<string, string[]> = {
-  best: ["Highest Sales", "Top Performance Rating", "Longest Tenure"],
-  top: ["Highest Sales", "Top Performance Rating", "Longest Tenure"],
-};
-
-function detectAmbiguity(question: string): string[] | null {
-  const lower = question.toLowerCase();
-  for (const term of Object.keys(AMBIGUOUS_TERMS)) {
-    if (lower.includes(term)) return AMBIGUOUS_TERMS[term];
-  }
-  return null;
-}
 
 let idCounter = 0;
 const nextId = () => `msg-${idCounter++}`;
@@ -49,7 +36,8 @@ function EmptyState() {
 }
 
 export default function AppPage() {
-  const { dbUrl, connectInfo, allowedTables, setAllowedTables } = useSession();
+  const { mode, dbUrl, pairingCode, connectInfo, allowedTables, setAllowedTables } =
+    useSession();
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
@@ -59,7 +47,10 @@ export default function AppPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, loading]);
 
-  if (!dbUrl || !connectInfo) {
+  const sessionReady =
+    !!connectInfo && (mode === "cloud" ? !!dbUrl : mode === "local" ? !!pairingCode : false);
+
+  if (!sessionReady) {
     return (
       <div className="flex h-[calc(100dvh-3.5rem)] flex-col">
         <EmptyState />
@@ -87,34 +78,36 @@ export default function AppPage() {
   async function runQuery(question: string) {
     setMessages((prev) => [...prev, { id: nextId(), role: "user", text: question }]);
 
-    const ambiguousOptions = detectAmbiguity(question);
-    if (ambiguousOptions) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: nextId(),
-          role: "clarification",
-          question: `I can find the top 5 employees, but how would you like to define \u201cbest\u201d?`,
-          options: ambiguousOptions,
-        },
-      ]);
-      return;
-    }
-
     setLoading(true);
     try {
-      const res = await executeQuery(question, dbUrl, allowedTables);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: nextId(),
-          role: "result",
-          question: res.question,
-          sql: res.sql,
-          results: res.results,
-          rowCount: res.row_count,
-        },
-      ]);
+      const res =
+        mode === "local"
+          ? await executeLocalQuery(pairingCode, question)
+          : await executeCloudQuery(question, dbUrl, allowedTables);
+
+      if (res.type === "clarification") {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: nextId(),
+            role: "clarification",
+            question: res.message,
+            options: res.options ?? [],
+          },
+        ]);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: nextId(),
+            role: "result",
+            question: res.question,
+            sql: res.sql,
+            results: res.results,
+            rowCount: res.row_count,
+          },
+        ]);
+      }
     } catch (err) {
       setMessages((prev) => [
         ...prev,
@@ -131,32 +124,7 @@ export default function AppPage() {
 
   function resolveClarification(option: string) {
     setMessages((prev) => [...prev, { id: nextId(), role: "user", text: `→ ${option}` }]);
-    setLoading(true);
-    executeQuery(`Who are the 5 best employees? Define "best" as: ${option}.`, dbUrl, allowedTables)
-      .then((res) => {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: nextId(),
-            role: "result",
-            question: res.question,
-            sql: res.sql,
-            results: res.results,
-            rowCount: res.row_count,
-          },
-        ]);
-      })
-      .catch((err) => {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: nextId(),
-            role: "error",
-            text: err instanceof Error ? err.message : "Something went wrong.",
-          },
-        ]);
-      })
-      .finally(() => setLoading(false));
+    runQuery(option);
   }
 
   return (

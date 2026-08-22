@@ -8,7 +8,13 @@ function load(): StoredSession | null {
     const raw = sessionStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as StoredSession;
-    if (!parsed.dbUrl || !parsed.connectInfo?.tables) return null;
+    const identityOk =
+      parsed.mode === "cloud"
+        ? !!parsed.dbUrl
+        : parsed.mode === "local"
+          ? !!parsed.pairingCode
+          : false;
+    if (!identityOk || !parsed.connectInfo?.tables) return null;
     return parsed;
   } catch {
     return null;
@@ -28,12 +34,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [session]);
 
   const value: SessionValue = {
+    mode: session?.mode ?? null,
     dbUrl: session?.dbUrl ?? "",
+    pairingCode: session?.pairingCode ?? "",
     connectInfo: session?.connectInfo ?? null,
     allowedTables: session?.allowedTables ?? [],
     setAllowedTables: (tables) =>
       setSession((prev) => (prev ? { ...prev, allowedTables: tables } : prev)),
-    connect: (url, info) => setSession({ dbUrl: url, connectInfo: info, allowedTables: [] }),
+    connect: (input, info) =>
+      setSession({
+        mode: input.mode,
+        dbUrl: input.dbUrl,
+        pairingCode: input.pairingCode,
+        connectInfo: info,
+        allowedTables: [],
+      }),
     clear: () => setSession(null),
   };
 

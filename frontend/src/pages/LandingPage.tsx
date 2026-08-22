@@ -1,4 +1,25 @@
-import ConnectForm from "../components/ConnectForm";
+import { Link } from "react-router-dom";
+
+const OPTIONS = [
+  {
+    to: "/connect/cloud",
+    tag: "cloud",
+    title: "Cloud database",
+    description:
+      "Hosted Postgres or MySQL that's reachable over the internet. Paste a connection URL and you're in.",
+    points: ["Paste a connection URL", "Postgres or MySQL", "Connects in seconds"],
+    cta: "Connect a cloud database",
+  },
+  {
+    to: "/connect/local",
+    tag: "local",
+    title: "Local database",
+    description:
+      "A database on your machine or private network. Run the AskDB Agent connector — no ports to open, your password never leaves your machine.",
+    points: ["Download the AskDB Agent", "Pair with a one-time code", "Nothing inbound exposed"],
+    cta: "Connect a local database",
+  },
+];
 
 export default function LandingPage() {
   return (
@@ -29,21 +50,51 @@ export default function LandingPage() {
         id="connect"
         className="scroll-mt-20 border-t border-line/80 bg-panel/40"
       >
-        <div className="mx-auto grid max-w-6xl items-center gap-12 px-4 py-16 sm:px-6 sm:py-20 lg:grid-cols-2">
-          <div>
+        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-20">
+          <div className="max-w-xl">
             <p className="font-mono text-[12px] uppercase tracking-widest text-mute">
               the next step
             </p>
-            <h2 className="mt-3 max-w-md font-display text-3xl font-bold tracking-tight text-ink sm:text-4xl">
+            <h2 className="mt-3 font-display text-3xl font-bold tracking-tight text-ink sm:text-4xl">
               Connect a database.
             </h2>
-            <p className="mt-4 max-w-md text-[14.5px] leading-relaxed text-mute">
-              Postgres or MySQL — paste a URL, or use connection details. From there it's a
-              click to the console.
+            <p className="mt-4 text-[14.5px] leading-relaxed text-mute">
+              Pick where your data lives. From there it's a click to the console.
             </p>
           </div>
-          <div className="lg:justify-self-end">
-            <ConnectForm />
+
+          <div className="mt-10 grid gap-4 md:grid-cols-2">
+            {OPTIONS.map((opt) => (
+              <Link
+                key={opt.to}
+                to={opt.to}
+                className="console-card group flex flex-col p-6 transition hover:border-mute"
+              >
+                <span className="font-mono text-[11.5px] uppercase tracking-widest text-amber">
+                  {opt.tag}
+                </span>
+                <h3 className="mt-2 font-display text-xl font-semibold tracking-tight text-ink">
+                  {opt.title}
+                </h3>
+                <p className="mt-2.5 text-[13.5px] leading-relaxed text-mute">
+                  {opt.description}
+                </p>
+                <ul className="mt-4 flex flex-col gap-1.5">
+                  {opt.points.map((point) => (
+                    <li
+                      key={point}
+                      className="flex items-center gap-2 font-mono text-[12px] text-mute"
+                    >
+                      <span className="text-amber">›</span>
+                      {point}
+                    </li>
+                  ))}
+                </ul>
+                <span className="btn btn-primary mt-6 self-start group-hover:brightness-105">
+                  {opt.cta}
+                </span>
+              </Link>
+            ))}
           </div>
         </div>
       </section>

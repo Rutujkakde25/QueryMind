@@ -10,13 +10,24 @@ export interface ConnectResponse {
   schema: Record<string, ColumnInfo[]>;
 }
 
-export interface QueryResponse {
+export interface QueryResultResponse {
   success: boolean;
+  type: "result";
   question: string;
   sql: string;
   results: Record<string, unknown>[];
   row_count: number;
 }
+
+export interface QueryClarificationResponse {
+  success: boolean;
+  type: "clarification";
+  question: string;
+  message: string;
+  options: string[];
+}
+
+export type QueryResponse = QueryResultResponse | QueryClarificationResponse;
 
 export interface ContactResponse {
   success: boolean;

@@ -161,7 +161,7 @@ def query(request: QueryRequest):
 
 @app.post("/agent/pair")
 def create_pairing_code():
-    code = registry.create_pairing_code()
+    code = registry.create_pairing_code()   
     return {"pairing_code": code}
 
 

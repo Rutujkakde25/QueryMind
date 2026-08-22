@@ -43,8 +43,13 @@ function TableNode({ table }: { table: SchemaTable }) {
 
 export default function SchemaRail({ tables, onRescope }: SchemaRailProps) {
   const navigate = useNavigate();
-  const { dbUrl, clear } = useSession();
+  const { mode, dbUrl, pairingCode, clear } = useSession();
   const [collapsed, setCollapsed] = useState(false);
+
+  const targetLabel =
+    mode === "local"
+      ? `local · agent ${pairingCode.slice(0, 8)}`
+      : dbUrl.split("@").pop();
 
   if (collapsed) {
     return (
@@ -88,7 +93,7 @@ export default function SchemaRail({ tables, onRescope }: SchemaRailProps) {
           <div className="min-w-0">
             <div className="text-[12px] font-semibold text-ink">Connected</div>
             <div className="truncate font-mono text-[11px] text-mute">
-              {dbUrl.split("@").pop()}
+              {targetLabel}
             </div>
           </div>
         </div>

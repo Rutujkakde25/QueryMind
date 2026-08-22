@@ -34,13 +34,19 @@ function columnSummary(cols: ColumnInfo[]): string {
 }
 
 export default function TablePicker() {
-  const { connectInfo, allowedTables, setAllowedTables, dbUrl } = useSession();
+  const { mode, dbUrl, pairingCode, connectInfo, allowedTables, setAllowedTables } =
+    useSession();
 
   const tables = connectInfo?.tables ?? [];
   const schema = connectInfo?.schema ?? {};
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(allowedTables.length > 0 ? allowedTables : tables)
   );
+
+  const targetLabel =
+    mode === "local"
+      ? `local · agent ${pairingCode.slice(0, 8)}`
+      : dbUrl.split("@").pop();
 
   function toggle(name: string) {
     setSelected((prev) => {
@@ -56,7 +62,7 @@ export default function TablePicker() {
       <div className="flex items-center gap-2 font-mono text-[11.5px] text-mute">
         <span className="text-amber">scope</span>
         <span className="text-rail">/</span>
-        <span className="truncate">{dbUrl.split("@").pop()}</span>
+        <span className="truncate">{targetLabel}</span>
       </div>
 
       <h1 className="mt-3 font-display text-3xl font-bold tracking-tight text-ink sm:text-4xl">

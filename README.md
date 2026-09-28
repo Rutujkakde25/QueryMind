@@ -1,8 +1,3 @@
-# QueryMind
-"Talk to your database"
-
-## for Testing 
-database_url = postgresql://neondb_owner:npg_3u2jcpDVzvxa@ep-solitary-dawn-axsut39w-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require
 # 🧠 QueryMind — Talk to Your Database
 
 Ask questions about your data in plain English and get answers back as a table. QueryMind reads your database schema, uses an LLM to write a safe, read-only SQL query, checks it against your real tables and columns, runs it, and shows you the SQL and the results. If your question is ambiguous, it **asks you a clarifying question** instead of guessing.
@@ -181,6 +176,9 @@ npm run dev                          # http://localhost:5173
 Open **Connect → Cloud** and paste a connection URL:
 ```
 postgresql://user:password@host:5432/dbname?sslmode=require
+
+## for Testing 
+database_url = postgresql://neondb_owner:npg_3u2jcpDVzvxa@ep-solitary-dawn-axsut39w-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require
 ```
 
 ### Local / private database
@@ -256,10 +254,3 @@ Pairing codes are random 8-character tokens that expire after 10 minutes if unus
 - [ ] Charts and query history
 
 ---
-
-## 👥 Contributors
-
-Built by students of Walchand College of Engineering, Sangli.
-
-- [@Rutujkakde25](https://github.com/Rutujkakde25)
-- [@PrasadK2402](https://github.com/PrasadK2402)

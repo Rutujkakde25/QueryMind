@@ -10,7 +10,7 @@ import { useSession } from "../lib/use-session";
 // Files produced by .github/workflows/build-agent.yml and attached to a release.
 const RELEASE_BASE: string =
   import.meta.env.VITE_AGENT_RELEASE_URL ??
-  "https://github.com/Rutujkakde25/QueryMind/releases/latest/download";
+  "https://github.com/Rutujkakde25/QueryMind/releases/download/agent-v0.1.0-dev.1";
 
 const DOWNLOADS = {
   windows: { label: "Windows", file: "AskDB-Agent-windows.exe" },

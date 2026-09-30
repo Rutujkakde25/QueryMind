@@ -2,6 +2,10 @@ name: build-agent
 on:
   push:
     tags: ["agent-v*"]
+
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -11,12 +15,17 @@ jobs:
           - { os: macos-latest,   suffix: mac }
           - { os: ubuntu-latest,  suffix: linux }
     runs-on: ${{ matrix.os }}
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
+
       - run: pip install -r askdb_agent/requirements.txt
+
       - run: pyinstaller --onefile --windowed --name AskDB-Agent-${{ matrix.suffix }} askdb_agent/main.py
+      
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/AskDB-Agent-*

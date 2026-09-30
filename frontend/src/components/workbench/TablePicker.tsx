@@ -34,7 +34,7 @@ function columnSummary(cols: ColumnInfo[]): string {
 }
 
 export default function TablePicker() {
-  const { mode, dbUrl, pairingCode, connectInfo, allowedTables, setAllowedTables } =
+  const { mode, dbUrl, connectInfo, allowedTables, setAllowedTables } =
     useSession();
 
   const tables = connectInfo?.tables ?? [];
@@ -45,7 +45,7 @@ export default function TablePicker() {
 
   const targetLabel =
     mode === "local"
-      ? `local · agent ${pairingCode.slice(0, 8)}`
+      ? "local · agent"
       : dbUrl.split("@").pop();
 
   function toggle(name: string) {

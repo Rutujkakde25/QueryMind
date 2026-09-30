@@ -8,6 +8,7 @@ app/sql/validator.py from the main backend, kept dependency-light
 
 import re
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import URL
 
 FORBIDDEN_KEYWORDS = [
     "INSERT", "UPDATE", "DELETE", "DROP",
@@ -15,15 +16,13 @@ FORBIDDEN_KEYWORDS = [
 ]
 
 
-def build_database_url(db_type: str, host: str, port: str, username: str,
-                        password: str, database: str) -> str:
-    """Build a SQLAlchemy URL from individual connect-form fields."""
-    drivers = {
-        "postgresql": "postgresql+psycopg2",
-        "mysql": "mysql+pymysql",
-    }
-    driver = drivers.get(db_type, db_type)
-    return f"{driver}://{username}:{password}@{host}:{port}/{database}"
+def build_database_url(db_type, host, port, username, password, database):
+    drivers = {"postgresql": "postgresql+psycopg2", "mysql": "mysql+pymysql"}
+    return URL.create(
+        drivers.get(db_type, db_type),
+        username=username, password=password,
+        host=host, port=int(port), database=database,
+    )
 
 
 def test_connection(database_url: str) -> None:
@@ -79,15 +78,18 @@ def validate_sql(sql: str) -> tuple[bool, str]:
     return True, "SQL query is valid"
 
 
-def execute_sql(database_url: str, sql: str) -> list[dict]:
-    # Defense in depth: the cloud backend should already validate before
-    # dispatching, but the agent re-checks locally too — never trust the wire.
+def execute_sql(database_url, sql: str, max_rows: int = 1000) -> list[dict]:
     ok, message = validate_sql(sql)
     if not ok:
         raise ValueError(message)
 
     engine = create_engine(database_url, pool_pre_ping=True)
-    with engine.connect() as connection:
-        result = connection.execute(text(sql))
-        rows = result.mappings().all()
-    return [dict(row) for row in rows]
+    with engine.connect() as conn:
+        if engine.dialect.name == "postgresql":
+            conn.execute(text("SET TRANSACTION READ ONLY"))
+            conn.execute(text("SET LOCAL statement_timeout = 15000"))
+        elif engine.dialect.name == "mysql":
+            conn.execute(text("SET SESSION TRANSACTION READ ONLY"))
+            conn.execute(text("SET SESSION MAX_EXECUTION_TIME = 15000"))
+        rows = conn.execute(text(sql)).mappings().fetchmany(max_rows)
+    return [dict(r) for r in rows]

@@ -1,15 +1,16 @@
 import asyncio
 import os
+import time
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from app.agent.querymind import QueryMindAgent
-from app.agent.registry import registry
-from app.sql.generator import generate_sql_or_clarification
 from pydantic import BaseModel
+
+from app.agent.querymind import QueryMindAgent
+from app.agent.registry import AgentConnection, registry
 from app.database.schema_inspector import get_schema, get_relationships
+from app.sql.generator import generate_sql_or_clarification
 
 load_dotenv()
 
@@ -20,26 +21,65 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# Comma-separated list, e.g. FRONTEND_ORIGIN=https://askdb.example.com
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("FRONTEND_ORIGIN", "http://localhost:5173").split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
+# --- request models ----------------------------------------------------------
+
 class ConnectRequest(BaseModel):
     database_url: str
+
 
 class ConversationTurn(BaseModel):
     role: str  # "assistant" or "user"
     content: str
 
 
+class QueryRequest(BaseModel):
+    question: str
+    database_url: str
+    conversation_history: list[ConversationTurn] = []
+
+
+class ContactRequest(BaseModel):
+    name: str
+    email: str
+    message: str
+
+
+class LocalConnectRequest(BaseModel):
+    # Holds the session token issued at pairing (name kept for frontend
+    # compatibility). Database credentials live in the agent, not here.
+    pairing_code: str
+
+
+class LocalQueryRequest(BaseModel):
+    pairing_code: str  # session token
+    question: str
+    conversation_history: list[ConversationTurn] = []
+    refresh_schema: bool = False
+
+
+# --- basic routes ------------------------------------------------------------
 
 @app.get("/")
 def root():
     return {"message": "QueryMind API is running"}
 
+
+# --- cloud database flow -----------------------------------------------------
 
 @app.post("/connect")
 def connect(request: ConnectRequest):
@@ -65,36 +105,6 @@ def connect(request: ConnectRequest):
                 "error": "Failed to connect to the database. Check the URL and try again.",
             },
         )
-
-
-
-class QueryRequest(BaseModel):
-    question: str
-    database_url: str
-    conversation_history: list[ConversationTurn] = []
-
-
-class ContactRequest(BaseModel):
-    name: str
-    email: str
-    message: str
-
-
-class LocalConnectRequest(BaseModel):
-    pairing_code: str
-    db_type: str  # "postgresql" | "mysql"
-    host: str
-    port: str
-    username: str
-    password: str
-    database: str
-
-
-class LocalQueryRequest(BaseModel):
-    pairing_code: str
-    question: str
-    conversation_history: list[ConversationTurn] = []
-
 
 
 @app.post("/query")
@@ -157,106 +167,142 @@ def query(request: QueryRequest):
         )
 
 
-# --- Local database flow (via a paired agent, no direct DB reachability needed) ---
+# --- local database flow (via a paired agent) --------------------------------
 
-@app.post("/agent/pair")
-def create_pairing_code():
-    code = registry.create_pairing_code()   
-    return {"pairing_code": code}
+# Tiny in-memory limiter for the unauthenticated pairing endpoint.
+_pair_hits: dict[str, list[float]] = {}
 
 
-@app.get("/agent/status/{pairing_code}")
-def agent_status(pairing_code: str):
-    return {"connected": registry.is_connected(pairing_code)}
+def _rate_limit(request: Request, limit: int = 10, window: int = 60):
+    ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    hits = [t for t in _pair_hits.get(ip, []) if now - t < window]
+    if len(hits) >= limit:
+        raise HTTPException(status_code=429, detail="Too many requests. Try again in a minute.")
+    hits.append(now)
+    _pair_hits[ip] = hits
 
 
-@app.websocket("/agent/connect")
-async def agent_connect(websocket: WebSocket, token: str):
-    if not registry.is_code_valid(token):
-        await websocket.close(code=4001)
-        return
-
-    await websocket.accept()
-    connection = registry.register(token, websocket)
-    try:
-        while True:
-            message = await websocket.receive_json()
-            connection.resolve(message["request_id"], message["result"])
-    except WebSocketDisconnect:
-        registry.unregister(token)
-
-
-def _db_params_from_request(request: LocalConnectRequest) -> dict:
-    return {
-        "db_type": request.db_type,
-        "host": request.host,
-        "port": request.port,
-        "username": request.username,
-        "password": request.password,
-        "database": request.database,
-    }
-
-
-@app.post("/connect/local")
-async def connect_local(request: LocalConnectRequest):
-    connection = registry.get(request.pairing_code)
+def _agent_or_400(session: str) -> AgentConnection:
+    connection = registry.get(session)
     if connection is None:
         raise HTTPException(
             status_code=400,
             detail={
                 "stage": "agent",
-                "error": "No agent is connected for this pairing code. Make sure the AskDB Agent is running.",
+                "error": "No agent is connected. Make sure the AskDB Agent is running.",
             },
         )
+    return connection
 
-    db_params = _db_params_from_request(request)
 
+async def _ask_agent(connection: AgentConnection, payload: dict) -> dict:
     try:
-        result = await connection.send_request({"type": "get_schema", "db_params": db_params})
+        return await connection.send_request(payload)
     except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail={"stage": "agent", "error": "Agent did not respond in time"})
+        raise HTTPException(
+            status_code=504,
+            detail={"stage": "agent", "error": "Agent did not respond in time"},
+        )
+    except (RuntimeError, WebSocketDisconnect):
+        raise HTTPException(
+            status_code=400,
+            detail={"stage": "agent", "error": "Agent disconnected. Reopen the AskDB Agent."},
+        )
+
+
+@app.post("/agent/pair")
+def create_pairing_code(request: Request):
+    _rate_limit(request)
+    return {"pairing_code": registry.create_pairing_code()}
+
+
+@app.get("/agent/status/{code}")
+def agent_status(code: str):
+    # Returns the session token exactly once, after the agent has paired.
+    session = registry.claim_session(code)
+    return {"connected": session is not None, "session": session}
+
+
+@app.websocket("/agent/connect")
+async def agent_connect(websocket: WebSocket, token: str):
+    session = registry.authenticate(token)
+    if session is None:
+        await websocket.close(code=4001)
+        return
+
+    await websocket.accept()
+    # Tell the agent its session token so it can reconnect without a new code.
+    await websocket.send_json({"type": "paired", "session": session})
+
+    connection = registry.register(session, websocket)
+    try:
+        while True:
+            message = await websocket.receive_json()
+            request_id = message.get("request_id")
+            if request_id:
+                connection.resolve(request_id, message.get("result", {}))
+    except WebSocketDisconnect:
+        pass
+    finally:
+        registry.unregister(session, connection)
+
+
+@app.post("/connect/local")
+async def connect_local(request: LocalConnectRequest):
+    connection = _agent_or_400(request.pairing_code)
+
+    # No credentials here — the agent already holds them locally.
+    result = await _ask_agent(connection, {"type": "get_schema"})
 
     if not result.get("success"):
         raise HTTPException(
             status_code=400,
-            detail={"stage": "database", "error": result.get("error", "Failed to connect to the database")},
+            detail={
+                "stage": "database",
+                "error": result.get("error", "Failed to read the database schema"),
+            },
         )
 
-    connection.db_params = db_params  # cache so /query/local doesn't need creds resent every turn
+    connection.schema = result["schema"]
+    connection.relationships = result["relationships"]
 
-    schema = result["schema"]
-    relationships = result["relationships"]
     return {
         "success": True,
-        "tables": list(schema.keys()),
-        "table_count": len(schema),
-        "relationship_count": sum(len(rels) for rels in relationships.values()),
-        "schema": schema,
+        "tables": list(connection.schema.keys()),
+        "table_count": len(connection.schema),
+        "relationship_count": sum(
+            len(rels) for rels in connection.relationships.values()
+        ),
+        "schema": connection.schema,
     }
 
 
 @app.post("/query/local")
 async def query_local(request: LocalQueryRequest):
-    connection = registry.get(request.pairing_code)
-    if connection is None:
-        raise HTTPException(status_code=400, detail={"stage": "agent", "error": "No agent connected for this pairing code"})
-    if connection.db_params is None:
-        raise HTTPException(status_code=400, detail={"stage": "agent", "error": "Call /connect/local first"})
+    connection = _agent_or_400(request.pairing_code)
 
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
 
-    try:
-        schema_result = await connection.send_request({"type": "get_schema", "db_params": connection.db_params})
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail={"stage": "agent", "error": "Agent did not respond in time"})
+    if connection.schema is None or request.refresh_schema:
+        schema_result = await _ask_agent(connection, {"type": "get_schema"})
+        if not schema_result.get("success"):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "stage": "database",
+                    "error": schema_result.get("error", "Failed to read the database schema"),
+                },
+            )
+        connection.schema = schema_result["schema"]
+        connection.relationships = schema_result["relationships"]
 
-    schema = schema_result["schema"]
-    relationships = schema_result["relationships"]
-
-    decision = generate_sql_or_clarification(
-        schema=schema,
-        relationships=relationships,
+    # The LLM call is blocking — keep it off the event loop.
+    decision = await asyncio.to_thread(
+        generate_sql_or_clarification,
+        schema=connection.schema,
+        relationships=connection.relationships,
         question=request.question,
         conversation_history=[turn.dict() for turn in request.conversation_history],
     )
@@ -272,17 +318,16 @@ async def query_local(request: LocalQueryRequest):
 
     sql = decision["sql"]
 
-    try:
-        exec_result = await connection.send_request(
-            {"type": "execute_query", "sql": sql, "db_params": connection.db_params}
-        )
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail={"stage": "agent", "error": "Agent did not respond in time"})
+    exec_result = await _ask_agent(connection, {"type": "execute_query", "sql": sql})
 
     if not exec_result.get("success"):
         raise HTTPException(
             status_code=400,
-            detail={"stage": "execution", "error": exec_result.get("error"), "sql": sql},
+            detail={
+                "stage": "execution",
+                "error": exec_result.get("error"),
+                "sql": sql,
+            },
         )
 
     return {

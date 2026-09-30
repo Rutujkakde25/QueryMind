@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   connectLocalDatabase,
@@ -7,58 +7,34 @@ import {
 } from "../lib/api";
 import { useSession } from "../lib/use-session";
 
-const AGENT_ZIP_URL =
-  "https://d38s88ui4xma4r.cloudfront.net/askdb_agent.zip";
+// Files produced by .github/workflows/build-agent.yml and attached to a release.
+const RELEASE_BASE: string =
+  import.meta.env.VITE_AGENT_RELEASE_URL ??
+  "https://github.com/Rutujkakde25/QueryMind/releases/latest/download";
 
-const ENGINES = [
-  { label: "PostgreSQL", value: "postgresql", defaultPort: "5432" },
-  { label: "MySQL", value: "mysql", defaultPort: "3306" },
-] as const;
+const DOWNLOADS = {
+  windows: { label: "Windows", file: "AskDB-Agent-windows.exe" },
+  mac: { label: "macOS", file: "AskDB-Agent-mac" },
+  linux: { label: "Linux", file: "AskDB-Agent-linux" },
+} as const;
 
-type Engine = (typeof ENGINES)[number]["value"];
-type Platform = "unix" | "windows";
+type OS = keyof typeof DOWNLOADS;
 
-const UNIX_COMMANDS = [
-  "unzip askdb_agent.zip",
-  "cd askdb_agent",
-  "chmod +x build.sh",
-  "./build.sh",
-  "cd dist",
-  "./AskDB-Agent",
-];
+// Backend expires unused pairing codes after 10 minutes; stop a little early.
+const CODE_TTL_MS = 9 * 60 * 1000;
 
-const WINDOWS_COMMANDS = [
-  "Expand-Archive askdb_agent.zip -DestinationPath .",
-  "cd askdb_agent",
-  "bash build.sh",
-  "cd dist",
-  ".\\AskDB-Agent.exe",
-];
+type Phase = "preparing" | "waiting" | "loading" | "error" | "expired";
 
-function CommandLine({ command }: { command: string }) {
-  const [copied, setCopied] = useState(false);
+function detectOS(): OS {
+  if (typeof navigator === "undefined") return "windows";
+  const ua = navigator.userAgent;
+  if (/Win/i.test(ua)) return "windows";
+  if (/Mac/i.test(ua)) return "mac";
+  return "linux";
+}
 
-  function handleCopy() {
-    navigator.clipboard
-      ?.writeText(command)
-      .then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      })
-      .catch(() => {});
-  }
-
-  return (
-    <div className="flex items-center justify-between gap-3 rounded-lg border border-line bg-panel px-3.5 py-2 font-mono text-[12px] text-ink">
-      <code className="overflow-x-auto whitespace-pre">{command}</code>
-      <button
-        onClick={handleCopy}
-        className="shrink-0 rounded-md border border-line px-2 py-1 font-mono text-[10.5px] text-mute transition hover:border-mute hover:text-ink"
-      >
-        {copied ? "copied" : "copy"}
-      </button>
-    </div>
-  );
+function downloadUrl(os: OS) {
+  return `${RELEASE_BASE}/${DOWNLOADS[os].file}`;
 }
 
 function StepHeading({
@@ -90,88 +66,101 @@ export default function LocalConnectPage() {
   const navigate = useNavigate();
   const { connect } = useSession();
 
-  // --- pairing ---
+  const [os] = useState<OS>(detectOS);
   const [pairingCode, setPairingCode] = useState("");
-  const [agentConnected, setAgentConnected] = useState(false);
-  const [generating, setGenerating] = useState(false);
-  const [pairError, setPairError] = useState("");
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // --- db details ---
-  const [engine, setEngine] = useState<Engine>(ENGINES[0].value);
-  const [host, setHost] = useState("localhost");
-  const [port, setPort] = useState<string>(ENGINES[0].defaultPort);
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [dbName, setDbName] = useState("");
-
-  const [status, setStatus] = useState<"idle" | "connecting" | "error">("idle");
+  const [session, setSession] = useState("");
+  const [phase, setPhase] = useState<Phase>("preparing");
   const [message, setMessage] = useState("");
+  const [copied, setCopied] = useState(false);
+  const codeCreatedAt = useRef(0);
 
-  const [platform, setPlatform] = useState<Platform>(() => {
-    if (typeof navigator === "undefined") return "unix";
-    return navigator.userAgent.includes("Win") ? "windows" : "unix";
-  });
+  // --- pairing code: created silently, the user never has to ask for it ---
+
+  const fetchCode = useCallback(async () => {
+    try {
+      const res = await requestPairingCode();
+      codeCreatedAt.current = Date.now();
+      setPairingCode(res.pairing_code);
+      setPhase("waiting");
+    } catch (err) {
+      setPhase("error");
+      setMessage(err instanceof Error ? err.message : "Couldn't reach AskDB. Try again.");
+    }
+  }, []);
 
   useEffect(() => {
-    if (!pairingCode || agentConnected) return;
-    let cancelled = false;
+    void fetchCode();
+  }, [fetchCode]);
 
-    async function check() {
+  function handleNewCode() {
+    setSession("");
+    setMessage("");
+    setPhase("preparing");
+    void fetchCode();
+  }
+
+  // --- once the agent has paired, read the schema and go straight in ---
+
+  const finishConnect = useCallback(
+    async (sessionToken: string) => {
+      setPhase("loading");
+      setMessage("");
+      try {
+        const info = await connectLocalDatabase(sessionToken);
+        connect({ mode: "local", pairingCode: sessionToken }, info);
+        navigate("/app");
+      } catch (err) {
+        setPhase("error");
+        setMessage(err instanceof Error ? err.message : "Couldn't read your database.");
+      }
+    },
+    [connect, navigate]
+  );
+
+  useEffect(() => {
+    if (phase !== "waiting" || !pairingCode) return;
+
+    const id = setInterval(async () => {
+      if (Date.now() - codeCreatedAt.current > CODE_TTL_MS) {
+        clearInterval(id);
+        setPhase("expired");
+        return;
+      }
       try {
         const res = await getAgentStatus(pairingCode);
-        if (!cancelled && res.connected) setAgentConnected(true);
+        if (res.connected && res.session) {
+          clearInterval(id);
+          setSession(res.session);
+          void finishConnect(res.session);
+        }
       } catch {
         // transient network error — keep polling
       }
-    }
+    }, 2000);
 
-    check();
-    pollRef.current = setInterval(check, 2000);
-    return () => {
-      cancelled = true;
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [pairingCode, agentConnected]);
+    return () => clearInterval(id);
+  }, [phase, pairingCode, finishConnect]);
 
-  async function handleGenerate() {
-    setGenerating(true);
-    setPairError("");
-    setAgentConnected(false);
-    try {
-      const res = await requestPairingCode();
-      setPairingCode(res.pairing_code);
-    } catch (err) {
-      setPairError(err instanceof Error ? err.message : "Couldn't generate a pairing code.");
-    } finally {
-      setGenerating(false);
-    }
+  // --- actions ---
+
+  // Runs inside the click, so the browser allows the clipboard write.
+  // The agent reads this on launch and pre-fills the pairing code.
+  function handleDownloadClick() {
+    navigator.clipboard?.writeText(pairingCode).catch(() => {});
   }
 
-  function isReady() {
-    return host.trim().length > 0 && port.trim().length > 0 && dbName.trim().length > 0;
+  function handleCopyCode() {
+    navigator.clipboard
+      ?.writeText(pairingCode)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => {});
   }
 
-  async function handleConnect() {
-    if (!isReady() || !pairingCode || !agentConnected) return;
-    setStatus("connecting");
-    setMessage("");
-    try {
-      const res = await connectLocalDatabase(pairingCode, {
-        dbType: engine,
-        host: host.trim(),
-        port: port.trim(),
-        username,
-        password,
-        database: dbName.trim(),
-      });
-      connect({ mode: "local", pairingCode }, res);
-      navigate("/app");
-    } catch (err) {
-      setStatus("error");
-      setMessage(err instanceof Error ? err.message : "Couldn't connect to that database.");
-    }
-  }
+  const others = (Object.keys(DOWNLOADS) as OS[]).filter((k) => k !== os);
+  const paired = phase === "loading";
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-14 sm:py-20">
@@ -182,260 +171,136 @@ export default function LocalConnectPage() {
         Local database.
       </h1>
       <p className="mt-3 max-w-xl text-[14.5px] leading-relaxed text-mute">
-        QueryMind never needs direct access to your machine. A small connector runs next to
-        your database and relays queries over one outbound connection.
+        A small app runs next to your database and relays read-only queries over one outbound
+        connection. Nothing to install into your database, no ports to open.
       </p>
 
       <div className="mt-10 flex flex-col gap-6">
         {/* ------------------------- STEP 1 · download ------------------------- */}
         <section className="console-card p-6">
-          <StepHeading step={1} title="Download the AskDB Agent connector" />
-          <p className="mt-3 text-[13.5px] leading-relaxed text-mute">
-            One zip works on Windows, macOS, and Linux. Your database password stays on
-            your machine — only query results travel to the cloud.
-          </p>
+          <StepHeading step={1} title="Download the AskDB Agent" done={paired} />
 
-          <a
-            href={AGENT_ZIP_URL}
-            download
-            className="btn btn-primary mt-5 w-full sm:w-auto"
-          >
-            Download AskDB Agent (.zip)
-          </a>
-
-          <p className="mt-2.5 font-mono text-[11px] text-mute">
-            Requires Python 3.9+ to build the agent (one-time setup below).
-          </p>
-        </section>
-
-        {/* --------------------------- STEP 2 · pair ---------------------------- */}
-        <section className="console-card p-6">
-          <StepHeading
-            step={2}
-            title="Run the agent and pair it"
-            done={agentConnected}
-          />
-          <p className="mt-3 text-[13.5px] leading-relaxed text-mute">
-            Run these commands in order:
-          </p>
-
-          <div className="mt-3 grid grid-cols-2 gap-1 rounded-lg border border-line bg-bone p-1">
-            <button
-              onClick={() => setPlatform("unix")}
-              aria-pressed={platform === "unix"}
-              className={`rounded-md px-2 py-1.5 text-[12.5px] font-medium transition ${
-                platform === "unix"
-                  ? "bg-amber/15 text-amber"
-                  : "text-mute hover:bg-panel2 hover:text-ink"
-              }`}
+          {pairingCode ? (
+            <a
+              href={downloadUrl(os)}
+              download
+              onClick={handleDownloadClick}
+              className="btn btn-primary mt-5 w-full sm:w-auto"
             >
-              macOS / Linux
+              Download for {DOWNLOADS[os].label}
+            </a>
+          ) : (
+            <button disabled className="btn btn-primary mt-5 w-full sm:w-auto">
+              <span className="h-1.5 w-1.5 animate-pulseDot rounded-full bg-current" />
+              Preparing…
             </button>
-            <button
-              onClick={() => setPlatform("windows")}
-              aria-pressed={platform === "windows"}
-              className={`rounded-md px-2 py-1.5 text-[12.5px] font-medium transition ${
-                platform === "windows"
-                  ? "bg-amber/15 text-amber"
-                  : "text-mute hover:bg-panel2 hover:text-ink"
-              }`}
-            >
-              Windows
-            </button>
-          </div>
-
-          <div className="mt-3 flex flex-col gap-1.5">
-            {(platform === "unix" ? UNIX_COMMANDS : WINDOWS_COMMANDS).map((cmd, i) => (
-              <CommandLine key={i} command={cmd} />
-            ))}
-          </div>
-
-          {platform === "windows" && (
-            <p className="mt-2.5 font-mono text-[11px] text-mute">
-              build.sh is a bash script — run it via Git Bash or WSL. Don't have either?
-              Use Git Bash's terminal for all steps above.
-            </p>
           )}
 
-          {!pairingCode ? (
-            <button
-              onClick={handleGenerate}
-              disabled={generating}
-              className="btn btn-primary mt-5"
-            >
-              {generating ? (
-                <>
-                  <span className="h-1.5 w-1.5 animate-pulseDot rounded-full bg-current" />
-                  Generating…
-                </>
+          {pairingCode && (
+            <p className="mt-2.5 font-mono text-[11.5px] text-mute">
+              Other platforms:{" "}
+              {others.map((k, i) => (
+                <span key={k}>
+                  {i > 0 && " · "}
+                  <a
+                    href={downloadUrl(k)}
+                    download
+                    onClick={handleDownloadClick}
+                    className="underline hover:text-ink"
+                  >
+                    {DOWNLOADS[k].label}
+                  </a>
+                </span>
+              ))}
+            </p>
+          )}
+        </section>
+
+        {/* ------------------- STEP 2 · open + enter details ------------------- */}
+        <section className={`console-card p-6 ${phase === "preparing" ? "opacity-60" : ""}`}>
+          <StepHeading step={2} title="Open it and enter your database details" done={paired} />
+          <p className="mt-3 text-[13.5px] leading-relaxed text-mute">
+            The pairing code fills in by itself. Type your database details into the agent and
+            press <span className="font-medium text-ink">Connect</span> — this page continues
+            automatically.
+          </p>
+
+          <div className="mt-4 flex items-center gap-2 font-mono text-[12.5px]">
+            {phase === "waiting" && (
+              <>
+                <span className="h-2 w-2 animate-pulseDot rounded-full bg-amber" />
+                <span className="text-mute">Waiting for the agent…</span>
+              </>
+            )}
+            {phase === "loading" && (
+              <>
+                <span className="h-2 w-2 animate-pulseDot rounded-full bg-[#1d9e75]" />
+                <span className="text-ink">Agent connected — reading your tables…</span>
+              </>
+            )}
+          </div>
+
+          {phase === "expired" && (
+            <div className="mt-4 flex flex-col items-start gap-3">
+              <p className="text-[13px] text-mute">
+                This pairing code expired. Get a new one and download again.
+              </p>
+              <button onClick={handleNewCode} className="btn btn-primary">
+                Get a new code
+              </button>
+            </div>
+          )}
+
+          {phase === "error" && (
+            <div className="mt-4 flex flex-col items-start gap-3">
+              <div
+                role="alert"
+                className="rounded-lg border border-danger/40 bg-danger/10 px-3.5 py-2.5 font-mono text-[12.5px] text-danger"
+              >
+                {message}
+              </div>
+              {session ? (
+                <button onClick={() => void finishConnect(session)} className="btn btn-primary">
+                  Try again
+                </button>
               ) : (
-                "Generate pairing code"
+                <button onClick={handleNewCode} className="btn btn-primary">
+                  Try again
+                </button>
               )}
-            </button>
-          ) : (
-            <div className="mt-5 flex flex-col gap-3">
-              <div className="flex flex-wrap items-center gap-3">
-                <code className="rounded-lg border border-line bg-panel px-4 py-2.5 font-mono text-xl font-bold tracking-[0.3em] text-amber">
-                  {pairingCode.toUpperCase()}
+            </div>
+          )}
+
+          {pairingCode && phase === "waiting" && (
+            <details className="mt-4 text-[13px] text-mute">
+              <summary className="cursor-pointer select-none hover:text-ink">
+                Pairing code didn't fill in?
+              </summary>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <code className="rounded-lg border border-line bg-panel px-3 py-2 font-mono text-[15px] font-bold tracking-wider text-amber">
+                  {pairingCode}
                 </code>
                 <button
-                  onClick={() =>
-                    navigator.clipboard?.writeText(pairingCode).catch(() => {})
-                  }
+                  onClick={handleCopyCode}
                   className="btn btn-ghost !px-3 !py-1.5 font-mono !text-[12px]"
                 >
-                  copy
+                  {copied ? "copied" : "copy"}
                 </button>
               </div>
-              <p className="text-[13px] leading-relaxed text-mute">
-                Paste this code into the AskDB Agent window and click{" "}
-                <span className="font-medium text-ink">Connect</span> there.
-              </p>
-              <div className="flex items-center gap-2 font-mono text-[12.5px]">
-                {agentConnected ? (
-                  <>
-                    <span className="h-2 w-2 rounded-full bg-[#1d9e75]" />
-                    <span className="text-ink">Agent connected — continue below</span>
-                  </>
-                ) : (
-                  <>
-                    <span className="h-2 w-2 animate-pulseDot rounded-full bg-amber" />
-                    <span className="text-mute">Waiting for agent…</span>
-                  </>
-                )}
-              </div>
-              {pairError && (
-                <div
-                  role="alert"
-                  className="rounded-lg border border-danger/40 bg-danger/10 px-3.5 py-2.5 font-mono text-[12.5px] text-danger"
-                >
-                  {pairError}
-                </div>
-              )}
-            </div>
+              <p className="mt-2 text-[12px]">Paste it into the “Pairing code” field in the agent.</p>
+            </details>
           )}
         </section>
 
-        {/* ------------------------ STEP 3 · db details ------------------------ */}
-        <section className={`console-card p-6 ${!agentConnected ? "opacity-60" : ""}`}>
-          <StepHeading step={3} title="Enter your database details" />
-          <p className="mt-3 text-[13.5px] leading-relaxed text-mute">
-            These details are relayed straight to the agent on your machine. The cloud never
-            stores them.
-          </p>
-
-          <div className="mt-5 flex flex-col gap-3.5">
-            <label className="flex flex-col gap-1.5">
-              <span className="text-[12px] font-medium text-mute">Engine</span>
-              <div className="grid grid-cols-2 gap-1 rounded-lg border border-line bg-bone p-1">
-                {ENGINES.map((eng) => (
-                  <button
-                    key={eng.value}
-                    onClick={() => {
-                      setEngine(eng.value);
-                      setPort(eng.defaultPort);
-                    }}
-                    aria-pressed={engine === eng.value}
-                    className={`rounded-md px-2 py-1.5 text-[12.5px] font-medium transition ${
-                      engine === eng.value
-                        ? "bg-amber/15 text-amber"
-                        : "text-mute hover:bg-panel2 hover:text-ink"
-                    }`}
-                  >
-                    {eng.label}
-                  </button>
-                ))}
-              </div>
-            </label>
-
-            <div className="grid grid-cols-3 gap-3">
-              <label className="col-span-2 flex flex-col gap-1.5">
-                <span className="text-[12px] font-medium text-mute">Host</span>
-                <input
-                  value={host}
-                  onChange={(e) => setHost(e.target.value)}
-                  placeholder="localhost"
-                  spellCheck={false}
-                  disabled={!agentConnected}
-                  className="field font-mono text-[13px]"
-                />
-              </label>
-              <label className="flex flex-col gap-1.5">
-                <span className="text-[12px] font-medium text-mute">Port</span>
-                <input
-                  value={port}
-                  onChange={(e) => setPort(e.target.value)}
-                  inputMode="numeric"
-                  disabled={!agentConnected}
-                  className="field font-mono text-[13px]"
-                />
-              </label>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <label className="flex flex-col gap-1.5">
-                <span className="text-[12px] font-medium text-mute">Username</span>
-                <input
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  spellCheck={false}
-                  disabled={!agentConnected}
-                  className="field font-mono text-[13px]"
-                />
-              </label>
-              <label className="flex flex-col gap-1.5">
-                <span className="text-[12px] font-medium text-mute">Password</span>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  disabled={!agentConnected}
-                  className="field font-mono text-[13px]"
-                />
-              </label>
-            </div>
-
-            <label className="flex flex-col gap-1.5">
-              <span className="text-[12px] font-medium text-mute">Database name</span>
-              <input
-                value={dbName}
-                onChange={(e) => setDbName(e.target.value)}
-                placeholder="app_db"
-                spellCheck={false}
-                disabled={!agentConnected}
-                className="field font-mono text-[13px]"
-              />
-            </label>
-          </div>
-
-          {message && status === "error" && (
-            <div
-              role="alert"
-              className="mt-4 rounded-lg border border-danger/40 bg-danger/10 px-3.5 py-2.5 font-mono text-[12.5px] text-danger"
-            >
-              {message}
-            </div>
-          )}
-
-          <button
-            onClick={handleConnect}
-            disabled={!agentConnected || !isReady() || status === "connecting"}
-            className="btn btn-primary mt-5 w-full sm:w-auto"
-          >
-            {status === "connecting" ? (
-              <>
-                <span className="h-1.5 w-1.5 animate-pulseDot rounded-full bg-current" />
-                Connecting…
-              </>
-            ) : (
-              "Connect Database"
-            )}
-          </button>
-          {!agentConnected && (
-            <p className="mt-2.5 font-mono text-[11.5px] text-mute">
-              Unlocks once the agent pairs above.
-            </p>
-          )}
+        {/* ----------------------------- trust card ----------------------------- */}
+        <section className="rounded-xl border border-line bg-bone px-5 py-4 text-[13px] leading-relaxed text-mute">
+          <p className="font-medium text-ink">What AskDB can and can't see</p>
+          <ul className="mt-2 list-disc space-y-1 pl-5">
+            <li>Your database password stays on your computer — it never reaches our servers.</li>
+            <li>We receive your table structure and the results of the questions you ask.</li>
+            <li>Queries are read-only and capped at 1,000 rows.</li>
+            <li>Close the agent any time to disconnect.</li>
+          </ul>
         </section>
       </div>
     </div>

@@ -43,12 +43,12 @@ function TableNode({ table }: { table: SchemaTable }) {
 
 export default function SchemaRail({ tables, onRescope }: SchemaRailProps) {
   const navigate = useNavigate();
-  const { mode, dbUrl, pairingCode, clear } = useSession();
+  const { mode, dbUrl, clear } = useSession();
   const [collapsed, setCollapsed] = useState(false);
 
   const targetLabel =
     mode === "local"
-      ? `local · agent ${pairingCode.slice(0, 8)}`
+      ? "local · agent"
       : dbUrl.split("@").pop();
 
   if (collapsed) {

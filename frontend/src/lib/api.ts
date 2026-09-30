@@ -1,6 +1,6 @@
 import type { ColumnInfo } from "./types";
 
-const API_BASE_URL = "http://localhost:8000";
+const API_BASE_URL: string = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
 export interface ConnectResponse {
   success: boolean;
@@ -40,15 +40,8 @@ export interface PairingCodeResponse {
 
 export interface AgentStatusResponse {
   connected: boolean;
-}
-
-export interface LocalDbFields {
-  dbType: "postgresql" | "mysql";
-  host: string;
-  port: string;
-  username: string;
-  password: string;
-  database: string;
+  // Session token — returned exactly once, right after the agent pairs.
+  session: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -120,39 +113,31 @@ export async function getAgentStatus(pairingCode: string): Promise<AgentStatusRe
 }
 
 /**
- * Polls agent status until the agent connects or the timeout elapses.
- * Use after showing the pairing code, while the user launches/pastes it
- * into the AskDB Agent app.
+ * Polls agent status until the agent pairs or the timeout elapses.
+ * Resolves with the session token, or null on timeout.
  */
-export async function waitForAgentConnection(
+export async function waitForAgentSession(
   pairingCode: string,
-  { intervalMs = 2000, timeoutMs = 120000 }: { intervalMs?: number; timeoutMs?: number } = {}
-): Promise<boolean> {
+  { intervalMs = 2000, timeoutMs = 600000 }: { intervalMs?: number; timeoutMs?: number } = {}
+): Promise<string | null> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    const { connected } = await getAgentStatus(pairingCode);
-    if (connected) return true;
+    const { connected, session } = await getAgentStatus(pairingCode);
+    if (connected && session) return session;
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
-  return false;
+  return null;
 }
 
-export async function connectLocalDatabase(
-  pairingCode: string,
-  fields: LocalDbFields
-): Promise<ConnectResponse> {
+/**
+ * Fetches the schema through the paired agent. No credentials are sent —
+ * the agent already holds them on the user's machine.
+ */
+export async function connectLocalDatabase(session: string): Promise<ConnectResponse> {
   const response = await fetch(`${API_BASE_URL}/connect/local`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      pairing_code: pairingCode,
-      db_type: fields.dbType,
-      host: fields.host,
-      port: fields.port,
-      username: fields.username,
-      password: fields.password,
-      database: fields.database,
-    }),
+    body: JSON.stringify({ pairing_code: session }),
   });
 
   if (!response.ok) {
@@ -164,7 +149,7 @@ export async function connectLocalDatabase(
 }
 
 export async function executeLocalQuery(
-  pairingCode: string,
+  session: string,
   question: string,
   conversationHistory: { role: string; content: string }[] = []
 ): Promise<QueryResponse> {
@@ -172,7 +157,7 @@ export async function executeLocalQuery(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      pairing_code: pairingCode,
+      pairing_code: session,
       question,
       conversation_history: conversationHistory,
     }),
